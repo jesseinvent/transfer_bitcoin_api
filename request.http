@@ -1,0 +1,10 @@
+### Send Bitcoin
+POST http://localhost:3000/bitcoin/send
+Content-Type: application/json
+Accept: application/application/json
+
+{
+    "senderAddress": "",
+    "receiverAdress": "",
+    "amountToSend": ""
+}

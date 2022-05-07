@@ -1,10 +1,8 @@
 import { HttpService } from '@nestjs/axios';
-import {
-  BadRequestException,
-  Injectable,
-  UnprocessableEntityException,
-} from '@nestjs/common';
+import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import * as Bitcore from 'bitcore-lib';
+import { firstValueFrom } from 'rxjs';
+import { SendBitcoin } from './interfaces/sendBitcoin.interface';
 import { UnspentTransactionOutput } from './interfaces/UnSpendtransaction.interface';
 
 @Injectable()
@@ -12,28 +10,30 @@ import { UnspentTransactionOutput } from './interfaces/UnSpendtransaction.interf
  * @recieverAddress - Address of the person you want
  * to send bitcoin to
  *
- * @amountToSend - The amount of bitcoin you want to send to someone from your wallet.
+ * @bitcoinToSend - The amount of bitcoin you want to send to someone from your wallet.
  * This amount will be deducted from your wallet and sent to this address
  */
 export class BitcoinService {
   private SATOSHI = 100000000;
 
   constructor(private httpService: HttpService) {}
-  sendBitcoin(recieverAddress: string, amountToSend: number) {
+  async sendBitcoin({
+    senderAddress,
+    senderPrivateKey,
+    recieverAddress,
+    bitcoinToSend,
+  }: SendBitcoin) {
     const sochain_network = 'BTCTEST';
-    const privateKey = '';
+    const privateKey = senderPrivateKey;
 
-    // Bitcoin address you want to send bitcoin from (Sender Address)
-    const sourceAddress = '';
-
-    const satoshiToSend = amountToSend * this.SATOSHI;
+    const satoshiToSend = bitcoinToSend * this.SATOSHI;
     let fee = 0;
     let inputCount = 0;
     const outputCount = 2; // OutputCount of 2 because we will sending to two addresses
     // receiver's address and change address
 
-    const utxos = this.fetchUnSpentTransactionOutputs(
-      sourceAddress,
+    const utxos = await this.fetchUnSpentTransactionOutputs(
+      senderAddress,
       sochain_network,
     );
 
@@ -63,6 +63,8 @@ export class BitcoinService {
       fee,
     });
 
+    console.log(`BitcoinAmountIsSufficient: ${amountIsSufficient}`);
+
     if (!amountIsSufficient) {
       throw new UnprocessableEntityException(
         'Balance too low for transactionu',
@@ -86,7 +88,7 @@ export class BitcoinService {
      * get the balance paid into after sending to the receiver.
      */
 
-    transaction.change(sourceAddress);
+    transaction.change(senderAddress);
 
     /**
      * Set transaction fee
@@ -117,7 +119,7 @@ export class BitcoinService {
     /**
      * Broadcast transaction to the Blockchain
      */
-    const result = this.broadCastTransaction(
+    const result = await this.broadCastTransaction(
       serializedTransaction,
       sochain_network,
     );
@@ -127,7 +129,10 @@ export class BitcoinService {
     return result;
   }
 
-  fetchUnSpentTransactionOutputs(address: string, network: string): any {
+  private async fetchUnSpentTransactionOutputs(
+    address: string,
+    network: string,
+  ): Promise<any> {
     try {
       /**
        * Unspent transaction amount outputs (UTXO):
@@ -142,9 +147,12 @@ export class BitcoinService {
        * There are only unspent transaction outputs (UTXO) scattered
        * in the Blockchain
        */
+
+      console.log('Fetching UTXOs...');
+
       const endpoint = `https://sochain.com/api/v2/get_tx_unspent/${network}/${address}`;
 
-      const response = this.httpService.get(endpoint) as any;
+      const response = await firstValueFrom(this.httpService.get(endpoint));
 
       return response.data.data;
     } catch (error) {
@@ -152,7 +160,7 @@ export class BitcoinService {
     }
   }
 
-  buildNewInputsFromUnspentOutputs(utxos: any) {
+  private buildNewInputsFromUnspentOutputs(utxos) {
     /**
      * Building new inputs from unspents outputs
      *
@@ -164,6 +172,8 @@ export class BitcoinService {
      * Transaction ID (txid): Unique ID to identify transaction in the blockchain
      * OutputIndex: Index of eact output in a transaction
      */
+
+    console.log('Building Inputs from UTXOs...');
 
     let totalAmountAvailable = 0;
     let inputCount = 0;
@@ -177,16 +187,15 @@ export class BitcoinService {
       (transaction: UnspentTransactionOutput) => {
         const utxo: any = {};
 
-        utxo['satoshis'] = Math.floor(
-          parseInt(transaction.value) * this.SATOSHI,
-        );
+        const valueInSatoshi = transaction.value * this.SATOSHI;
+
+        utxo['satoshis'] = valueInSatoshi;
         utxo['script'] = transaction.script_hex;
         utxo['address'] = utxos.address;
         utxo['txId'] = transaction.txid;
         utxo['outputIndex'] = transaction.output_no;
 
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        totalAmountAvailable += utxo.satoshis;
+        totalAmountAvailable += valueInSatoshi;
         inputCount++;
         inputs.push(utxo);
       },
@@ -195,7 +204,7 @@ export class BitcoinService {
     return { inputs, totalAmountAvailable, inputCount };
   }
 
-  verifyAvailableTransactionAmount({
+  private verifyAvailableTransactionAmount({
     totalAmountAvailable,
     satoshiToSend,
     fee,
@@ -204,10 +213,12 @@ export class BitcoinService {
     satoshiToSend: number;
     fee: number;
   }) {
-    return totalAmountAvailable - satoshiToSend - fee < 0;
+    const result = satoshiToSend + fee < totalAmountAvailable; // Bitcoin amount is sufficient
+
+    return result;
   }
 
-  calculateTotalTransactionFee({
+  private calculateTotalTransactionFee({
     inputCount,
     outputCount,
     satoshisToPayPerByte,
@@ -235,23 +246,29 @@ export class BitcoinService {
      * fee = transactionSize/this.SATOSHI
      */
 
+    console.log('Calculating transaction mining fee...');
+
     const transactionSize =
       inputCount * 180 + outputCount * 34 + 10 - inputCount;
 
     const fee = transactionSize * satoshisToPayPerByte;
-    const convertFeeToSatoshi = fee / this.SATOSHI;
+    // const convertFeeToSatoshi = fee / this.SATOSHI;
 
-    return convertFeeToSatoshi;
+    return fee;
   }
 
-  broadCastTransaction(
+  private async broadCastTransaction(
     serializedTransactionHex: string,
     sochain_network: string,
-  ) {
+  ): Promise<any> {
+    console.log('Broadcasting transaction to Blockchain...');
+
     const endpoint = `https://sochain.com/api/v2/send_tx/${sochain_network}`;
-    const result = this.httpService.post(endpoint, {
-      tx_hex: serializedTransactionHex,
-    }) as any;
+    const result = await firstValueFrom(
+      this.httpService.post(endpoint, {
+        tx_hex: serializedTransactionHex,
+      }),
+    );
 
     return result.data.data;
   }

@@ -1,5 +1,5 @@
 export interface UnspentTransactionOutput {
-  value: string;
+  value: number;
   script_hex: string;
   address: string;
   txid: string;

@@ -1,11 +1,11 @@
-import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { BitcoinModule } from './bitcoin/bitcoin.module';
 
 @Module({
-  imports: [BitcoinModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), BitcoinModule],
   controllers: [AppController],
   providers: [AppService],
 })
